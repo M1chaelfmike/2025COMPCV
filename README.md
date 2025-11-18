@@ -6,8 +6,7 @@
 
 <!-- Demo image: place a file named demo.png in the repo root to show here. -->
 ![Demo image (demo.png)](demo.png)
-<!-- Fallback to existing depth_vis.png if demo.png is not present -->
-![Depth visualization fallback](depth_vis.png)
+
 
 - 使用 Ultralytics YOLO 进行目标检测（示例中只对 `car` 显示框）。
 - 可选地使用 MiDaS 深度模型进行深度预测，并在 `Depth` 窗口显示深度灰度图。
