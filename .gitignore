@@ -1,0 +1,17 @@
+*.pt
+*.pth
+*.npy
+*.onnx
+*.tflite
+torch_cache/
+outputs/
+checkpoints/
+weights/
+__pycache__/
+*.mp4
+*.avi
+*.mov
+*.zip
+*.tar.gz
+/.vscode/
+.DS_Store
