@@ -1,0 +1,6 @@
+flask
+opencv-python
+numpy
+ultralytics
+# Note: PyTorch is intentionally omitted here. Install PyTorch separately following
+# the instructions at https://pytorch.org/get-started/locally/ for your platform/CUDA.
