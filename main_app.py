@@ -10,6 +10,7 @@ import time
 import sys
 import cv2
 import numpy as np
+import threading
 
 # --- Configuration (define here, do not import from other files) ---
 WEIGHTS = "yolov10m.pt"
@@ -25,6 +26,42 @@ TARGET_HEIGHT = 960
 
 import os
 import detection
+
+# Thread-safe shared frame for external consumers (e.g. a web server)
+_frame_lock = threading.Lock()
+_latest_frame = None
+# optional callback that will be called with each new frame: Callable[[numpy.ndarray], None]
+_frame_callback = None
+
+def get_latest_frame():
+    """Return a copy of the latest visualization frame (BGR numpy array) or None."""
+    with _frame_lock:
+        if _latest_frame is None:
+            return None
+        return _latest_frame.copy()
+
+def set_frame_callback(cb):
+    """Set an optional callback function called with each new frame.
+
+    cb should accept one argument: the frame as a BGR numpy array.
+    """
+    global _frame_callback
+    _frame_callback = cb
+
+def _publish_frame(frame):
+    """Internal: store and optionally callback with a copy of frame."""
+    global _latest_frame
+    try:
+        fcpy = frame.copy()
+    except Exception:
+        fcpy = frame
+    with _frame_lock:
+        _latest_frame = fcpy
+    if _frame_callback is not None:
+        try:
+            _frame_callback(fcpy)
+        except Exception:
+            pass
 
 # Local helpers to avoid importing from `car_alert_simple`
 def init_model(weights_path: str):
@@ -156,6 +193,12 @@ def main():
         # detection
         dets = detection.detect_frame(model, frame_t, conf=CONF_THRESHOLD, iou=IOU_THRESHOLD)
         vis, alert = detection.draw_detections(frame_t, dets, area_frac_threshold=AREA_FRAC_THRESHOLD)
+
+        # publish the visualisation for external consumers (web server, etc.)
+        try:
+            _publish_frame(vis)
+        except Exception:
+            pass
 
         # depth processing removed — detection-only mode
 
