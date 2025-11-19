@@ -21,15 +21,104 @@ DISPLAY_MAX_WIDTH = 1280
 TARGET_WIDTH = 544
 TARGET_HEIGHT = 960
 
-# Depth options
-ENABLE_DEPTH = True
-DEPTH_EVERY_N_FRAMES = 3
+# Depth module removed — using detection only
 
-from car_alert_simple import init_model, init_camera
-# import only the depth loader function (we pass it into our depth module)
-from car_alert_simple import init_depth_model
+import os
 import detection
-import depth
+
+# Local helpers to avoid importing from `car_alert_simple`
+def init_model(weights_path: str):
+    """Load YOLO model from weights_path."""
+    try:
+        from ultralytics import YOLO
+    except Exception:
+        print("Error: ultralytics YOLO not available. Please install ultralytics.")
+        return None
+    if not os.path.exists(weights_path):
+        print(f"Warning: weights file '{weights_path}' not found. Model load may fail if path is incorrect.")
+    print(f"Loading YOLO model from {weights_path} ...")
+    try:
+        model = YOLO(weights_path)
+        print("YOLO model loaded.")
+        return model
+    except Exception as e:
+        print("Failed to load YOLO model:", e)
+        return None
+
+
+def init_camera(index: int, target_w: int, target_h: int):
+    """Open camera and attempt to set target resolution; return cap, disp_w, disp_h."""
+    cap = cv2.VideoCapture(index)
+    if not cap.isOpened():
+        print(f"Cannot open camera {index}")
+        sys.exit(2)
+    cam_w0 = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    cam_h0 = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    print(f"Camera native resolution before set: {cam_w0} x {cam_h0}")
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, float(target_w))
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, float(target_h))
+    cam_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    cam_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    print(f"Camera resolution after set attempt: {cam_w} x {cam_h}")
+    display_scale = 1.0
+    if cam_w > DISPLAY_MAX_WIDTH and DISPLAY_MAX_WIDTH > 0:
+        display_scale = DISPLAY_MAX_WIDTH / float(cam_w)
+    disp_w = max(1, int(cam_w * display_scale))
+    disp_h = max(1, int(cam_h * display_scale))
+    return cap, disp_w, disp_h
+
+
+def transform_frame_to_target(frame, target_w: int, target_h: int):
+    h, w = frame.shape[:2]
+    if (w, h) == (target_w, target_h):
+        return frame
+    scale = max(target_w / w, target_h / h)
+    new_w = int(round(w * scale))
+    new_h = int(round(h * scale))
+    resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    x0 = max(0, (new_w - target_w) // 2)
+    y0 = max(0, (new_h - target_h) // 2)
+    cropped = resized[y0:y0 + target_h, x0:x0 + target_w]
+    ch, cw = cropped.shape[:2]
+    if ch != target_h or cw != target_w:
+        out = np.zeros((target_h, target_w, 3), dtype=frame.dtype)
+        out[0:ch, 0:cw] = cropped
+        return out
+    return cropped
+
+
+def init_depth_model():
+    """Simple depth model loader compatible with depth.init_depth(loader=...).
+
+    This mirrors the behaviour of the prior script but is kept local to avoid
+    importing the original file.
+    """
+    try:
+        import torch
+    except Exception as e:
+        print("Torch not available, cannot load depth model:", e)
+        return None, None, None
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print("Using device for depth:", device)
+    model_name = "MiDaS"
+    try:
+        print(f"Loading depth model '{model_name}' from torch.hub ...")
+        midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+        lname = model_name.lower()
+        if "small" in lname:
+            transform = midas_transforms.small_transform
+        elif "dpt" in lname or "hybrid" in lname:
+            transform = midas_transforms.dpt_transform
+        else:
+            transform = midas_transforms.default_transform
+
+        midas = torch.hub.load("intel-isl/MiDaS", model_name).to(device)
+        midas.eval()
+        return midas, transform, device
+    except Exception as e:
+        print("Failed to load depth model from torch.hub:", e)
+        return None, None, None
 
 
 def main():
@@ -50,17 +139,6 @@ def main():
     midas_model = None
     midas_transform = None
     midas_device = None
-    if ENABLE_DEPTH:
-        # pass the loader from car_alert_simple into our depth module
-        midas_model, midas_transform, midas_device = depth.init_depth(loader=init_depth_model)
-        if midas_model is not None:
-            print("Depth model ready")
-
-    cv2.namedWindow("CarAlert", cv2.WINDOW_NORMAL)
-    cv2.resizeWindow("CarAlert", disp_w, disp_h)
-    if ENABLE_DEPTH:
-        cv2.namedWindow("Depth", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("Depth", disp_w, disp_h)
 
     print("Main app started. Press q to quit.")
 
@@ -79,12 +157,7 @@ def main():
         dets = detection.detect_frame(model, frame_t, conf=CONF_THRESHOLD, iou=IOU_THRESHOLD)
         vis, alert = detection.draw_detections(frame_t, dets, area_frac_threshold=AREA_FRAC_THRESHOLD)
 
-        # depth (synchronous every N frames)
-        if ENABLE_DEPTH and midas_model is not None and (frame_idx % DEPTH_EVERY_N_FRAMES == 0):
-            raw = depth.predict_depth_sync(midas_model, midas_transform, midas_device, frame_t)
-            if raw is not None:
-                raw_vis = depth.visualize_depth(raw)
-                cv2.imshow("Depth", cv2.resize(raw_vis, (disp_w, disp_h), interpolation=cv2.INTER_AREA))
+        # depth processing removed — detection-only mode
 
         # display detections
         cv2.imshow("CarAlert", cv2.resize(vis, (disp_w, disp_h), interpolation=cv2.INTER_AREA))
