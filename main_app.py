@@ -32,6 +32,10 @@ _frame_lock = threading.Lock()
 _latest_frame = None
 # optional callback that will be called with each new frame: Callable[[numpy.ndarray], None]
 _frame_callback = None
+# thread-safe metadata for external consumers
+_meta_lock = threading.Lock()
+_vehicle_count = 0
+_last_inference_time = 0.0
 
 def get_latest_frame():
     """Return a copy of the latest visualization frame (BGR numpy array) or None."""
@@ -62,6 +66,26 @@ def _publish_frame(frame):
             _frame_callback(fcpy)
         except Exception:
             pass
+
+
+def get_vehicle_count():
+    """Return the most recently measured vehicle count (int)."""
+    with _meta_lock:
+        return int(_vehicle_count)
+
+
+def get_last_inference_time():
+    """Return the last inference time in seconds (float)."""
+    with _meta_lock:
+        return float(_last_inference_time)
+
+
+def _set_stats(vehicle_count: int, inference_time: float):
+    """Internal: update vehicle count and inference time in a thread-safe way."""
+    global _vehicle_count, _last_inference_time
+    with _meta_lock:
+        _vehicle_count = int(vehicle_count)
+        _last_inference_time = float(inference_time)
 
 # Local helpers to avoid importing from `car_alert_simple`
 def init_model(weights_path: str):
@@ -190,13 +214,26 @@ def main():
         from car_alert_simple import transform_frame_to_target
         frame_t = transform_frame_to_target(frame, TARGET_WIDTH, TARGET_HEIGHT)
 
-        # detection
-        dets = detection.detect_frame(model, frame_t, conf=CONF_THRESHOLD, iou=IOU_THRESHOLD)
+        # detection (measure inference time)
+        try:
+            t0 = time.time()
+            dets = detection.detect_frame(model, frame_t, conf=CONF_THRESHOLD, iou=IOU_THRESHOLD)
+            inference_time = time.time() - t0
+        except Exception:
+            dets = []
+            inference_time = 0.0
+
         vis, alert = detection.draw_detections(frame_t, dets, area_frac_threshold=AREA_FRAC_THRESHOLD)
 
         # publish the visualisation for external consumers (web server, etc.)
         try:
             _publish_frame(vis)
+        except Exception:
+            pass
+
+        # update shared stats (vehicle count, last inference time)
+        try:
+            _set_stats(len(dets), inference_time)
         except Exception:
             pass
 
